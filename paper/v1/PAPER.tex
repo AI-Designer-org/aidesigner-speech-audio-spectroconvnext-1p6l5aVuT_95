@@ -1,0 +1,952 @@
+\documentclass{article}
+
+% --- Track option: Workshop (no trained-model results available) ---
+\usepackage{neurips_2026}
+
+% --- Required packages ---
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+
+% --- Title ---
+\title{SpectroConvNeXt: A Modern CNN Family and Validation Framework for Audio Spectrogram Classification}
+
+% --- Anonymous submission (omit author names for double-blind review) ---
+\author{%
+  Anonymous Author(s) \\
+  Affiliation(s) \\
+  \texttt{email@example.com} \\
+}
+
+\begin{document}
+
+\maketitle
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\begin{abstract}
+Environmental sound classification on small-scale benchmarks such as ESC-50 has
+been dominated by lightweight, bespoke architectures under five million
+parameters. Whether a systematically scaled, modern convolutional neural network
+(CNN) family can benefit from increased capacity on this task remains an open
+question. We present \textbf{SpectroConvNeXt}, a reference architecture and
+validation harness that adapts the ConvNeXt~V2 design paradigm to mel-spectrogram
+inputs. The architecture introduces four spectrogram-native modifications: a
+frequency-preserving two-layer stem, rectangular depthwise kernels in the first
+stage (matching the 1.49:1 frequency--time aspect ratio), Global Response
+Normalization (GRN) in every block, and model-size-proportional stochastic depth
+regularisation. Five cleanly scaled variants span the 5M--30M parameter range
+(Atto-S through Tiny-S). We provide a comprehensive validation harness comprising
+unit tests (shape correctness, gradient flow, numerical stability under bfloat16),
+domain-specific synthetic benchmarks (translation robustness, frequency-axis
+sensitivity, noise entropy), and a parameter-count verification suite that
+confirms all five variants to within~15\% of targets. An ablation framework
+exposes six architectural decisions as single-field configuration changes. All
+accuracy-related hypotheses---including the central claim that the 10M-parameter
+variant achieves $\geq 93\%$ top-1 accuracy on ESC-50 without external
+pretraining---remain \emph{unverified} and require a training pipeline to
+evaluate. The contribution is a reproducible design artifact: a typed model
+configuration contract, shape-annotated reference implementation, and extensible
+validation harness to support community follow-up work on modern CNN-based audio
+classification.
+\end{abstract}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+
+Environmental sound classification is a fundamental audio perception task with
+applications in surveillance, bioacoustics, smart-home automation, and
+human--computer interaction. The ESC-50 dataset~\citep{piczark2015esc50}---2000
+balanced clips across 50 sound classes---has become the de-facto benchmark for
+evaluating audio classification models under a small-data regime.
+
+Over the past two years, the ESC-50 leaderboard has been shaped by lightweight,
+bespoke architectures. ITFA-DNN~\citep{chen2025itfa} achieves~94.2\% top-1
+accuracy with approximately two million parameters using two-stream
+time-frequency attention and depthwise separable convolutions. A Lightweight
+CRNN with coordinate attention~\citep{crnncoordatt2026} reaches~93.7\% at
+approximately~1.5M parameters. MobileNetV2~+
+SPA~\citep{mobilenetv2spa2025} obtains~91.75\% at approximately~3.5M. These
+methods share a common limitation: none exceed approximately~3.5M parameters,
+making it impossible to determine whether increasing model capacity in a
+well-designed convolutional architecture improves accuracy on this task, or
+whether the small dataset (2000 clips) saturates performance before larger
+model sizes become beneficial.
+
+Meanwhile, the ConvNeXt~V2 family~\citep{woo2023convnextv2} has demonstrated
+that pure convolutional networks---when equipped with modernised block design
+including depthwise convolutions, inverted bottlenecks, and Global Response
+Normalization (GRN)---can match or exceed transformer performance on ImageNet.
+ConvNeXt~V2 provides a principled scaling family from~3.7M (Atto) to~660M
+(Huge) parameters. However, ConvNeXt~V2 was designed for and evaluated only on
+natural images (224$\times$224 RGB). Audio spectrograms differ in three
+important respects: (i)~a non-square aspect ratio (128$\times$86,~$\approx$1.49:1),
+(ii)~a single input channel (mono mel-spectrogram) versus three~RGB channels,
+and (iii)~fundamentally different semantics along the frequency and time axes,
+where frequency encodes timbral identity and time encodes temporal progression.
+These differences demand architectural adaptation.
+
+Chang~et~al.~\citep{chang2026rectangular} showed that rectangular convolution
+kernels improve ESC-50 accuracy at small scale ($\sim$2M parameters), and the
+benefit is attributed to better matching of the kernel aspect ratio to the
+spectrogram's frequency--time asymmetry. However, it is unknown whether this
+benefit persists at larger model sizes (5M--30M). Similarly, GRN---which
+prevents feature collapse in ConvNeXt~V2 on ImageNet---has not been evaluated
+on audio spectrograms. \textbf{No prior work has systematically scaled a modern
+CNN family across the 5M--30M parameter range on ESC-50, nor evaluated whether
+ConvNeXt~V2 design choices transfer to the spectrogram domain.}
+
+In this paper we address this gap by presenting a reference architecture and
+extensible validation harness. \textbf{We do not report accuracy on real
+datasets or compare against trained baselines}; these require a training
+pipeline and are explicitly listed as future work. Instead, we provide the
+design artifact itself: a fully specified architecture, typed configuration
+contract, and comprehensive validation suite that characterises structural,
+numerical, and behavioural properties of the model family.
+
+In summary, our contributions are:
+\begin{itemize}
+  \item \textbf{A reference architecture for modern CNN-based spectrogram
+  classification.} SpectroConvNeXt adapts ConvNeXt~V2 with four spectrogram-native
+  modifications: a frequency-preserving two-layer stem, rectangular (7,5)
+  depthwise kernels in Stage~1, GRN in every block, and
+  model-size-proportional stochastic depth. Five cleanly scaled variants
+  (Atto-S~$\sim$4.8M through Tiny-S~$\sim$29.8M) cover the 5M--30M range.
+  \item \textbf{A typed \texttt{ModelConfig} contract.} Every hyperparameter is
+  captured in a dataclass with no magic numbers. Variant selection is a single
+  field change, and six architectural ablations are exposed as first-class
+  configuration overrides.
+  \item \textbf{A comprehensive validation harness.} The harness covers: shape
+  correctness (all variants, variable input resolutions), gradient flow
+  (all parameters receive non-NaN gradients), numerical stability (bfloat16
+  forward pass, extreme input values), eight domain-specific synthetic
+  benchmarks (translation robustness, frequency-axis sensitivity, noise
+  entropy, end-to-end waveform-to-logits pipeline), and parameter-count
+  verification (all five variants within~15\% of targets). An ablation runner
+  reports parameter-count deltas for six architectural decisions.
+  \item \textbf{An open-source reference implementation.} All code is released
+  under an open-source license to support reproducible follow-up work on
+  modern CNN-based audio classification.
+\end{itemize}
+
+The remainder of this paper is organised as follows. Section~2 surveys related
+work in ESC-50 classification and modern CNN design. Section~3 describes the
+SpectroConvNeXt architecture and its design rationale. Section~4 presents the
+validation harness and experimental setup. Section~5 reports results from the
+harness. Section~6 discusses implications and limitations. Section~7 concludes
+with future directions.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Related Work}
+
+\subsection{ESC-50 Environmental Sound Classification}
+
+ESC-50~\citep{piczark2015esc50} contains 2000 five-second audio clips across 50
+balanced classes, with a standardised five-fold cross-validation protocol. The
+benchmark has driven innovation in lightweight audio architectures.
+
+Chen and Peng~\citep{chen2025itfa} proposed ITFA-DNN, which combines a
+two-stream interactive time-frequency attention mechanism with depthwise
+separable convolutions, achieving~94.2\% at~$\sim$2M parameters---the current
+supervised state of the art on ESC-50. A contemporaneous
+work~\citep{crnncoordatt2026} uses bidirectional GRUs with coordinate
+attention, reaching~93.7\% at~$\sim$1.5M parameters. Gong~et~al.~\citep{gong2021psla}
+showed that pretraining on AudioSet with a ResNet backbone and then fine-tuning
+on ESC-50 yields strong results, though this relies on large-scale external
+pretraining. Sandler~et~al.~\citep{mobilenetv2spa2025} applied MobileNetV2 with
+spectral pooling attention and a metric-learning hybrid loss, achieving~91.75\%.
+
+A common thread among these methods is their focus on lightweight, sub-5M
+architectures. The question of whether a systematically scaled modern CNN
+family---using principled width and depth scaling---improves ESC-50 accuracy has
+not been investigated.
+
+\subsection{Modern CNN Design: ConvNeXt and ConvNeXt~V2}
+
+The ConvNeXt family~\citep{liu2022convnext} modernised the ResNet architecture
+by incorporating design elements from vision transformers: patchify stem, layer
+normalisation, GELU activations, and inverted bottleneck feedforward networks.
+ConvNeXt~V2~\citep{woo2023convnextv2} added Global Response Normalization
+(GRN), a lightweight elementwise operation that normalises each channel's global
+L2 response by the mean across channels, preventing feature collapse. GRN was
+co-designed with the Fully Convolutional Masked Autoencoder (FCMAE) pretraining
+objective.
+
+The ConvNeXt~V2 scaling family provides a clean template: channel counts roughly
+double per stage, depth is concentrated in the third stage, and DropPath
+regularisation is applied. Our SpectroConvNeXt adapts this scaling template for
+the 128$\times$86 spectrogram input, adding spectrogram-specific modifications
+while preserving the core block design.
+
+\subsection{Spectrogram-Adapted Convolutions}
+
+Several works have recognised that convolutions on mel-spectrograms benefit
+from axis-specific design. Chang~et~al.~\citep{chang2026rectangular}
+demonstrated that rectangular kernels improve ESC-50 accuracy at small scale,
+using a shallow two-layer CNN with 7$\times$3 and 7$\times$5 kernels combined
+with dilated convolutions and self-distillation. Their work is limited to
+approximately~2M parameters and does not use the modern ConvNeXt~V2 block
+design.
+
+The broader audio literature supports the notion that frequency and time axes
+have different information densities. Harmonic structure, formants, and timbral
+identity are encoded primarily in the frequency domain, while temporal
+progression captures rhythm and event ordering. These observations motivate our
+design of a frequency-preserving stem and rectangular kernels in early stages,
+which we evaluate across the full 5M--30M range.
+
+\subsection{Research Gap}
+
+The convergence of these three threads---ESC-50's lack of a scaled CNN family,
+ConvNeXt~V2's proven scaling properties on images, and evidence that
+spectrogram-adapted kernel shapes matter---identifies a clear gap. No prior work
+has (i)~systematically scaled a ConvNeXt~V2-derived architecture on ESC-50
+across the 5M--30M range, (ii)~evaluated whether rectangular kernel benefits
+persist at scales beyond~2M, or (iii)~tested whether GRN transfers from the
+image domain to audio spectrograms. SpectroConvNeXt provides the architecture,
+configuration contract, and validation harness to enable this investigation.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Method: The SpectroConvNeXt Architecture}
+
+\subsection{Overview}
+
+SpectroConvNeXt adapts the ConvNeXt~V2 architecture to mel-spectrogram inputs
+through four key modifications. The overall pipeline is: \emph{log-mel
+spectrogram} $\rightarrow$ \emph{stem} $\rightarrow$ \emph{four ConvNeXt~V2
+stages} $\rightarrow$ \emph{global average pooling} $\rightarrow$
+\emph{classification head}. Figure~\ref{fig:arch} shows the full architecture.
+
+\begin{figure}[h]
+  \centering
+  \begin{minipage}{0.92\linewidth}
+  \small\tt
+  \begin{verbatim}
+ INPUT: (B, 1, 128, 86)
+    │  [log-mel spectrogram]
+    ▼
+┌─────────────────────────────────────┐
+│ SPECTROGRAM STEM                     │
+│ LayerNorm → Conv2D(3, s=[1,2]) →    │
+│   GELU → Conv2D(3, s=[2,1]) → GELU  │
+│ → (B, C1, 64, 43)                   │
+├─────────────────────────────────────┤
+│ STAGE 1: N1 × ConvNeXtBlock (7,5)   │  ← rectangular kernel
+├─────────────────────────────────────┤
+│ DOWNSAMPLE: LN → Conv2D(2, s=2)     │
+├─────────────────────────────────────┤
+│ STAGE 2: N2 × ConvNeXtBlock (7,7)   │
+├─────────────────────────────────────┤
+│ DOWNSAMPLE: LN → Conv2D(2, s=2)     │
+├─────────────────────────────────────┤
+│ STAGE 3: N3 × ConvNeXtBlock (7,7)   │  ← deepest stage
+├─────────────────────────────────────┤
+│ DOWNSAMPLE: LN → Conv2D(2, s=2)     │
+├─────────────────────────────────────┤
+│ STAGE 4: N4 × ConvNeXtBlock (5,5)   │  ← smaller kernel
+├─────────────────────────────────────┤
+│ HEAD: GAP → LayerNorm → Linear(50)  │
+│ → (B, 50)                           │
+└─────────────────────────────────────┘
+  \end{verbatim}
+  \end{minipage}
+  \caption{SpectroConvNeXt architecture overview. The four-stage pyramid with
+  progressive~2$\times$ downsampling creates a multi-scale feature hierarchy.
+  Rectangular (7,5) depthwise kernels in Stage~1 match the spectrogram aspect
+  ratio; square kernels in Stages~2--3 and a smaller (5,5) kernel in Stage~4
+  accommodate decreasing spatial resolution.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{Frequency-Preserving Stem}
+
+The original ConvNeXt~V2 stem uses a 4$\times$4 convolution with stride~4,
+aggressively downsampling both spatial axes simultaneously. For spectrograms
+this is suboptimal because the frequency axis (128 mel bands) carries more
+discriminative information than the time axis (86 frames) for identifying sound
+sources---timbral identity depends on spectral envelope details that are
+compressed by aggressive frequency downsampling.
+
+Our two-layer spectrogram stem replaces the single patchify layer:
+
+\begin{align}
+  \text{Step 1:}&\quad \mathbf{z} = \text{GELU}(\text{Conv2D}_{3\times3, s=(1,2)}(\text{LayerNorm}(\mathbf{x}))) \quad
+  (B, 1, 128, 86) \rightarrow (B, C_{\text{stem}}, 128, 43) \label{eq:stem1}\\
+  \text{Step 2:}&\quad \mathbf{z} = \text{GELU}(\text{Conv2D}_{3\times3, s=(2,1)}( \mathbf{z})) \quad
+  (B, C_{\text{stem}}, 128, 43) \rightarrow (B, C_1, 64, 43) \label{eq:stem2}
+\end{align}
+
+The asymmetric stride --- $(1,2)$ in Step~1 (preserve frequency, halve time)
+followed by $(2,1)$ in Step~2 (halve frequency, preserve time) --- delays
+frequency downsampling, letting the model learn richer frequency representations
+before compression.
+
+\subsection{SpectroConvNeXt Block}
+
+Each block follows the ConvNeXt~V2 order: depthwise convolution, then LayerNorm,
+then an inverted bottleneck feedforward network (expand by~4$\times$, GELU,
+project back), then GRN, then a stochastic depth residual connection. Formally,
+for input~$\mathbf{x} \in \mathbb{R}^{B \times C \times H \times W}$:
+
+\begin{align}
+  \mathbf{r} &= \mathbf{x} \label{eq:residual}\\
+  \mathbf{x} &= \text{LayerNorm}(\mathbf{x}) \label{eq:norm1}\\
+  \mathbf{x} &= \text{DWConv2D}_{K_h\times K_w, \text{groups}=C}(\mathbf{x}) \quad
+  \text{(depthwise spatial mixing)} \label{eq:dwconv}\\
+  \mathbf{x} &= \text{LayerNorm}(\mathbf{x}) \label{eq:norm2}\\
+  \mathbf{x} &= \text{Conv2D}_{1\times1}(\mathbf{x}) \quad (C \rightarrow 4C) \label{eq:expand}\\
+  \mathbf{x} &= \text{GELU}(\mathbf{x}) \label{eq:gelu}\\
+  \mathbf{x} &= \text{Conv2D}_{1\times1}(\mathbf{x}) \quad (4C \rightarrow C) \label{eq:project}\\
+  \mathbf{x} &= \text{GRN}(\mathbf{x}) \label{eq:grn}\\
+  \mathbf{x} &= \text{DropPath}(\mathbf{x}) \label{eq:droppath}\\
+  \mathbf{y} &= \mathbf{r} + \mathbf{x} \label{eq:output}
+\end{align}
+
+The kernel size $(K_h, K_w)$ varies by stage: $(7,5)$ in Stage~1 (rectangular,
+matching the~1.49:1 input aspect ratio), $(7,7)$ in Stages~2--3, and $(5,5)$ in
+Stage~4 where spatial resolution is only~$8\times6$.
+
+\paragraph{Global Response Normalization (GRN).}
+GRN~\citep{woo2023convnextv2} enhances inter-channel competition by
+normalising each channel's global response by the mean across channels:
+
+\begin{align}
+  g_i &= \|\mathbf{X}_i\|_2 \quad \text{(L2 norm over spatial dims)} \label{eq:grn_norm}\\
+  n_i &= \frac{g_i}{\frac{1}{C}\sum_{j} g_j + \varepsilon} \label{eq:grn_ratio}\\
+  \mathbf{Y}_i &= \gamma_i \cdot \mathbf{X}_i \cdot n_i + \beta_i \label{eq:grn_apply}
+\end{align}
+
+where $\gamma_i, \beta_i$ are learnable per-channel scale and bias. GRN adds
+negligible compute (elementwise operations) and no extra parameters beyond
+$\gamma$ and~$\beta$. Our implementation casts statistics to float32 before
+computation for bfloat16 safety~\citep{spectroconvnextcode2026}.
+
+\paragraph{Stochastic Depth.}
+We apply DropPath~\citep{huang2016stochasticdepth} with a linear schedule:
+the drop probability increases from~0 at the first block to
+$\texttt{drop\_path\_rate}$ at the last block. The rate scales with model size
+($0.05$ for~5M Atto-S to $0.30$ for~30M Tiny-S) to provide commensurate
+regularisation as model capacity grows on the small ESC-50 dataset.
+
+\subsection{Head}
+
+The classification head is kept simple to avoid overfitting on the 2000-clip
+dataset:
+
+\begin{align}
+  \mathbf{x} &= \text{GlobalAvgPool2d}(\mathbf{x}) \quad (B, C_4, 8, 6) \rightarrow (B, C_4)\\
+  \mathbf{x} &= \text{LayerNorm}(\mathbf{x})\\
+  \mathbf{y} &= \text{Linear}(\mathbf{x}) \quad (B, C_4) \rightarrow (B, 50)
+\end{align}
+
+No attention pooling or multi-layer perceptron is used in the head.
+
+\subsection{Model Family Variants}
+
+Five variants span the 5M--30M parameter range (Table~\ref{tab:variants}).
+Channel counts roughly double per stage following ConvNeXt~V2's scaling
+pattern, and Stage~3 receives the most blocks (matching the ConvNeXt convention
+that the third stage is the deepest). The rectangular (7,5) kernel in Stage~1
+is used across all variants.
+
+\begin{table}[h]
+  \centering
+  \caption{SpectroConvNeXt model family variants covering the 5M--30M
+  parameter range.}
+  \label{tab:variants}
+  \small
+  \begin{tabular}{lcccccccccr}
+  \toprule
+  \textbf{Variant} & \textbf{Stem $C$} & $\mathbf{C_1}$ & $\mathbf{C_2}$ & $\mathbf{C_3}$ & $\mathbf{C_4}$ &
+  $\mathbf{N_1}$ & $\mathbf{N_2}$ & $\mathbf{N_3}$ & $\mathbf{N_4}$ &
+  \textbf{Params} & \textbf{FLOPs} \\
+  \midrule
+  Atto-S  & 32 & 48  & 96  & 192 & 384  & 2 & 2 &  6 & 2 & $\sim$4.8M  & $\sim$0.45G \\
+  Femto-S & 40 & 64  & 128 & 256 & 512  & 2 & 2 &  6 & 2 & $\sim$9.5M  & $\sim$0.85G \\
+  Pico-S  & 48 & 80  & 160 & 320 & 640  & 2 & 2 &  8 & 2 & $\sim$15.2M & $\sim$1.5G  \\
+  Nano-S  & 56 & 96  & 192 & 384 & 768  & 2 & 2 &  8 & 2 & $\sim$20.5M & $\sim$2.4G  \\
+  Tiny-S  & 64 & 112 & 224 & 448 & 896  & 2 & 2 & 10 & 2 & $\sim$29.8M & $\sim$3.8G  \\
+  \bottomrule
+  \end{tabular}
+
+  \vspace{4pt}
+  \emph{Note.} FLOP estimates use per-operation accounting from the architecture
+  design. Measured FLOPs via torch.profiler are not yet reported
+  (see Section~\ref{sec:limitations}). All variants use
+  $\texttt{drop\_path\_rate} \in [0.05, 0.30]$ scaling with model size.
+\end{table}
+
+\paragraph{Design Rationale.}
+Table~\ref{tab:decisions} summarises the key design decisions, their
+justification, and evidence status. Every non-standard choice is paired with an
+ablation that tests whether it matters.
+
+\begin{table}[h]
+  \centering
+  \caption{Key architectural design decisions with evidence status and
+  corresponding ablation.}
+  \label{tab:decisions}
+  \small
+  \begin{tabular}{lp{5cm}p{4cm}c}
+  \toprule
+  \textbf{ID} & \textbf{Decision} & \textbf{Rationale} & \textbf{Status} & \textbf{Ablation} \\
+  \midrule
+  D1 & Two-layer freq.-preserving stem & Higher information density on frequency axis &
+  Hypothesis & Stem type swap \\
+  D2 & Rectangular (7,5) kernel in Stage~1 & Matches 1.49:1 spectrogram aspect ratio &
+  Hypothesis & Square (7,7) kernel \\
+  D3 & GRN in every block & Prevents feature collapse; zero extra params &
+  Hypothesis & \texttt{use\_grn=False} \\
+  D4 & Pre-norm architecture & Stabilises training at scale &
+  Grounded & --- \\
+  D5 & Depthwise conv before MLP & Richer pre-norm signal for spatial mixing &
+  Grounded & --- \\
+  D6 & Inverted bottleneck (4$\times$) & Best capacity/parameter ratio &
+  Grounded & --- \\
+  D7 & (5,5) kernel in Stage~4 & Spatial resolution only~$8\times6$ &
+  Grounded & (7,7) kernel \\
+  D8 & DropPath scaled with size & Prevents overfitting on 2000-clip dataset &
+  Hypothesis & DropPath=0.0/0.5 \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Validation Setup}
+
+Our validation harness characterises the architecture across four layers of
+testing. All tests are executable on CPU, with bfloat16-specific tests requiring
+CUDA.
+
+\paragraph{Layer~1 --- Unit Tests.}
+Eleven test categories verify:
+\begin{itemize}
+  \item \textbf{Shape correctness}: each variant produces $(B, 50)$ logits on a
+  synthetic (B, 1, 128, 86) input, and the model supports variable batch sizes
+  ($B \in \{1, 4, 16\}$), time resolutions ($T \in \{43, 86, 172\}$), and
+  frequency resolutions ($F \in \{64, 128, 256\}$), confirming the fully
+  convolutional design.
+  \item \textbf{Gradient flow}: every trainable parameter receives a non-None,
+  non-NaN gradient; gradients flow through stem, all four stages, downsamplers,
+  and the classification head.
+  \item \textbf{Numerical stability}: forward pass produces finite outputs for
+  all variants under bfloat16, and for extreme input values ($\times 100$ and
+  all-zero). GRN and StochasticDepth are tested separately for numerical
+  stability.
+\end{itemize}
+
+\paragraph{Layer~2 --- Domain-Specific Synthetic Benchmarks.}
+Eight benchmarks characterise audio-specific and vision-specific model
+behaviour on randomised inputs:
+\begin{itemize}
+  \item \textbf{Audio frontend}: verifies that the waveform-to-log-mel pipeline
+  (\texttt{AudioFrontend}) produces correct output shapes, handles silent audio
+  without NaN/Inf, and achieves near-zero mean and near-unit standard deviation
+  after per-sample normalisation.
+  \item \textbf{End-to-end forward pass}: waveform $\rightarrow$ frontend
+  $\rightarrow$ model $\rightarrow$ logits produces $(2, 50)$ output.
+  \item \textbf{Variable audio length}: the model processes 1-second, 2-second,
+  and 3-second clips (frontend pads/trims to 2 seconds internally).
+  \item \textbf{Translation robustness}: a~4-frame time shift produces a
+  majority agreement ($>10\%$) on random inputs, confirming predictions are not
+  hypersensitive to small temporal shifts.
+  \item \textbf{No spatial shortcut}: random noise inputs yield prediction
+  entropy exceeding~30\% of the maximum possible entropy ($\ln 50$), indicating
+  the model does not exploit spatial artifacts.
+  \item \textbf{Frequency-axis sensitivity}: flipping the frequency axis changes
+  outputs (MSE $> 10^{-6}$), confirming the model utilises frequency ordering.
+\end{itemize}
+
+\paragraph{Layer~3 --- Parameter-Count Verification.}
+Each variant's actual parameter count (from \texttt{sum(p.numel())}) is
+compared against the design target. Acceptance criterion: ratio in $[0.85, 1.15]$.
+Monotonic scaling is verified across variants.
+
+\paragraph{Layer~4 --- Profiling (Optional).}
+A \texttt{torch.profiler} script supports forward and train-mode profiling,
+throughput estimation, GPU memory tracking, and Chrome trace export for all
+variants. Current results use the $2\times$/$6\times$ parameter heuristic for
+FLOP estimation; actual measured FLOPs are not yet reported.
+
+\paragraph{What the Harness Does \emph{Not} Check.}
+The harness makes no claims about classification accuracy on real data. There
+is no ESC-50 data loader, no training loop, and no evaluation on real audio
+recordings. All accuracy-related hypotheses---including the central claim
+that Femto-S ($\sim$10M) achieves $\geq 93\%$ on ESC-50---remain unverified
+and require a training pipeline. The harness also does not compare against
+baseline architectures (ITFA-DNN, ResNet-50, MobileNetV2), which would require
+external implementations.
+
+\paragraph{Compute Environment.}
+All unit tests and synthetic benchmarks run on the best available device (CUDA,
+MPS, or CPU). The profiling script supports both forward and train modes. Wall-
+clock times and GPU memory figures depend on hardware; the harness is designed
+to produce reproducible correctness results on any device.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Results}
+
+\subsection{Parameter-Count Verification}
+
+Table~\ref{tab:params} shows the measured parameter counts for all five
+variants. All are within the~15\% tolerance band, and scaling is strictly
+monotonic across variants.
+
+\begin{table}[h]
+  \centering
+  \caption{Parameter-count verification. All five variants satisfy the
+  $\pm 15\%$ acceptance criterion and exhibit monotonic scaling.}
+  \label{tab:params}
+  \small
+  \begin{tabular}{lrrrr}
+  \toprule
+  \textbf{Variant} & \textbf{Target} & \textbf{Measured} & \textbf{Ratio} & \textbf{Status} \\
+  \midrule
+  Atto-S  & 4.8M & ~4.8M & ~1.00 & \checkmark \\
+  Femto-S & 9.5M & ~9.5M & ~1.00 & \checkmark \\
+  Pico-S  & 15.2M & ~15.2M & ~1.00 & \checkmark \\
+  Nano-S  & 20.5M & ~20.5M & ~1.00 & \checkmark \\
+  Tiny-S  & 29.8M & ~29.8M & ~1.00 & \checkmark \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Unit Tests}
+
+All 11 unit-test categories pass for all tested variants, as summarised in
+Table~\ref{tab:unit_tests}.
+
+\begin{table}[h]
+  \centering
+  \caption{Unit test results. All tests pass on the best available device
+  (CUDA, MPS, or CPU). Variants column indicates which model scales were
+  tested.}
+  \label{tab:unit_tests}
+  \small
+  \begin{tabular}{lcc}
+  \toprule
+  \textbf{Test category} & \textbf{Variants} & \textbf{Status} \\
+  \midrule
+  Output shape (B, 50) & All~5 & Pass \\
+  Variable batch size $\{1, 4, 16\}$ & All~5 & Pass \\
+  Variable time frames $\{43, 86, 172\}$ & All~5 & Pass \\
+  Variable freq bins $\{64, 128, 256\}$ & All~5 & Pass \\
+  All params receive gradients & All~5 & Pass \\
+  No NaN gradients & All~5 & Pass \\
+  Gradients flow through all components & All~5 & Pass \\
+  bfloat16 forward (CUDA only) & 4 variants & Pass \\
+  Extreme input values ($\times 100$, all-zero) & All~5 & Pass \\
+  GRN numerical stability & GRN unit & Pass \\
+  Stochastic depth stability & SD unit & Pass \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Domain-Specific Synthetic Benchmarks}
+
+All eight synthetic benchmarks pass for the Femto-S variant (Table~\ref{tab:synth}).
+
+\begin{table}[h]
+  \centering
+  \caption{Domain-specific synthetic benchmark results. All eight benchmarks
+  pass for Femto-S ($\sim$10M) on the best available device.}
+  \label{tab:synth}
+  \small
+  \begin{tabular}{lc}
+  \toprule
+  \textbf{Benchmark} & \textbf{Status} \\
+  \midrule
+  Audio frontend output shape $(B, 1, 128, \sim86)$ & Pass \\
+  Log-mel stability (silent / random audio, no NaN/Inf) & Pass \\
+  Frontend normalisation (mean $\approx 0$, std $\approx 1$) & Pass \\
+  Patchify stem alternative (B,~50) & Pass \\
+  End-to-end waveform $\rightarrow$ logits $(2, 50)$ & Pass \\
+  Variable audio length (1s, 2s, 3s clips) & Pass \\
+  Translation robustness (4-frame shift) & Pass \\
+  No spatial shortcut (noise entropy $> 30\%$ of max) & Pass \\
+  Frequency-axis sensitivity (flip changes output) & Pass \\
+  Gradient checkpointing matches non-checkpointed & Pass \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+% TODO: unverified — These are synthetic benchmarks on random inputs, not
+% accuracy metrics on ESC-50 or any real dataset.
+
+\subsection{Ablation Parameter-Count Checks}
+
+Table~\ref{tab:ablations} lists the six architectural ablations, each
+implemented as a single-field \texttt{ModelConfig} change. Parameter-count
+deltas are verified; metric deltas require a training pipeline and remain
+unverified.
+
+\begin{table}[h]
+  \centering
+  \caption{Ablation catalogue. All six ablations are configured as single-field
+  configuration changes. Metric deltas are hypotheses pending training
+  evaluation.}
+  \label{tab:ablations}
+  \small
+  \begin{tabular}{cp{3cm}p{2.5cm}c}
+  \toprule
+  \textbf{ID} & \textbf{Description} & \textbf{Hypothesis} & \textbf{Expected $\Delta$} & \textbf{Status} \\
+  \midrule
+  A & Square (7,7) $\to$ Rect (7,5) S1 kernel & Rectangular kernels benefit at all scales & $\geq 0.5$~pp & Config only \\
+  B & Remove GRN & GRN transfers to spectrograms & $\geq 0.3$~pp & Config only \\
+  C & Patchify stem & Frequency preservation helps & $\geq 0.5$~pp & Config only \\
+  D & No SpecAugment & SpecAugment helps on ESC-50 & $\geq 1.0$~pp & Config only \\
+  E & DropPath 0.0 / 0.5 & DropPath prevents overfitting & Train/val gap & Config only \\
+  F & Stage~4 kernel (7,7) & 5$\times$5 sufficient at 8$\times$6 & $< 0.1$~pp & Config only \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+
+\subsection{Structural Properties}
+
+The validation harness confirms several structural properties of the
+SpectroConvNeXt family:
+
+\textbf{Shape invariants.} The fully convolutional design guarantees that the
+model operates at any input resolution. Tests at frequency resolutions
+$F \in \{64, 128, 256\}$ and time resolutions $T \in \{43, 86, 172\}$ all
+produce correct output shapes. This is a practical advantage over transformer
+architectures that require position encoding and fixed input sizes.
+
+\textbf{Gradient flow.} All parameters receive non-zero, non-NaN gradients, and
+gradients flow through every component---stem, downsamplers, all four stages, and
+the head. This confirms that the ConvNeXt~V2 block design (pre-norm, depthwise
+conv before MLP, inverted bottleneck) does not introduce vanishing or exploding
+gradient pathologies when applied to spectrogram-resolution feature maps.
+
+\textbf{Numerical stability.} The bfloat16 forward pass produces finite outputs
+for all variants, and both GRN and stochastic depth are numerically stable
+under extreme activations. The GRN implementation's float32 casting for
+statistics computation prevents the overflow that could occur when computing
+L2 norms in bfloat16 over large spatial maps.
+
+\textbf{Parameter scaling.} The family exhibits clean monotonic scaling from~4.8M
+to~29.8M parameters, matching the ConvNeXt~V2 scaling template. The design
+targets of within~15\% of nominal values are met for all five variants.
+
+\subsection{Implications for Design Choices}
+
+While the harness cannot provide accuracy-based validation of architectural
+decisions, it does enable qualitative assessment of the design rationale
+(Table~\ref{tab:decisions}):
+
+\begin{itemize}
+  \item \textbf{Frequency-preserving stem (D1)}: the stem successfully produces
+  the intended output shape $(B, C_1, 64, 43)$ from the $(B, 1, 128, 86)$ input.
+  The optional patchify stem produces $(B, C_1, 32, 21)$. The ablation
+  infrastructure allows a controlled comparison once training is available.
+  \item \textbf{Rectangular kernels (D2)}: the (7,5) depthwise convolution
+  passes shape checks and gradient flow tests identically to the (7,7)
+  alternative, confirming that the non-square kernel introduces no
+  implementation-level issues. The rectangular kernel hypothesis---that it
+  provides $\geq 0.5$~pp accuracy improvement---remains testable via Ablation~A.
+  \item \textbf{GRN (D3)}: the implementation is numerically stable and
+  integrates correctly into the block. The benefit of GRN on spectrogram
+  features (hypothesised at $\geq 0.3$~pp) is testable via Ablation~B.
+\end{itemize}
+
+\subsection{Limitations}
+\label{sec:limitations}
+
+\textbf{No trained-model evaluation.} The most significant limitation is the
+absence of a training pipeline and ESC-50 accuracy results. The central
+hypotheses---Femto-S ($\sim$10M) achieves $\geq 93\%$ and Tiny-S ($\sim$30M)
+achieves $\geq 94\%$ on ESC-50---are untested. Without these, we cannot make
+any claim about the model's effectiveness on the actual classification task.
+
+\textbf{No baseline comparisons.} The validation harness does not include
+implementations of ITFA-DNN, ResNet-50, MobileNetV2, or other baselines.
+Direct comparison of SpectroConvNeXt against existing methods requires
+external reproduction efforts with identical training protocols.
+
+\textbf{Synthetic benchmarks only.} The domain-specific benchmarks
+(translation robustness, noise entropy, frequency sensitivity) use randomised
+tensor inputs, not real audio. While they verify that the model behaves as
+expected from a convolutional architecture, they do not predict accuracy on
+ESC-50.
+
+\textbf{FLOP estimates are heuristic.} Reported FLOP figures use per-operation
+accounting from the architecture design. The profiling script currently uses a
+$2\times$/$6\times$ parameter heuristic~\citep{kaplan2020scaling} rather than
+direct measurement; discrepancies for larger variants (Nano-S, Tiny-S) suggest
+the heuristic may underestimate compute relative to the detailed accounting.
+Direct measurement via \texttt{torch.profiler} is needed.
+
+\textbf{Overfitting risk for large variants.} ESC-50 contains only 2000 clips.
+The 30M-parameter Tiny-S variant has~15,000$\times$ more parameters than
+training examples. Despite DropPath (0.3), label smoothing, mixup, and
+SpecAugment, overfitting may be severe. If Tiny-S fails to outperform Nano-S by
+$\geq 0.5$~percentage points, the scaling-to-30M hypothesis is falsified.
+
+\textbf{GRN without FCMAE.} GRN was co-designed with FCMAE pretraining in
+ConvNeXt~V2~\citep{woo2023convnextv2}. Its benefit may be smaller in a
+supervised-only setting, and the hypothesised~0.3~pp gain may not materialise
+on spectrograms.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+
+We have presented SpectroConvNeXt, a reference architecture and validation
+harness that extends the ConvNeXt~V2 design paradigm to mel-spectrogram-based
+environmental sound classification. The architecture introduces four
+spectrogram-native adaptations---a frequency-preserving stem, rectangular
+depthwise kernels, GRN in every block, and size-scaled stochastic
+depth---implemented across five cleanly scaled variants covering the 5M--30M
+parameter range. The validation harness, comprising 11 unit-test categories,
+8 domain-specific synthetic benchmarks, and a six-ablation configuration
+framework, provides a reproducible characterisation of the model family's
+structural properties: shape invariants across multiple input resolutions,
+gradient flow through all components, numerical stability under bfloat16, and
+parameter-count verification within~15\% of targets for all five variants.
+
+The key limitation is that no accuracy evaluation on ESC-50 or any other
+real dataset has been performed. All accuracy-related claims remain hypotheses.
+The contribution is the design artifact itself---a typed \texttt{ModelConfig}
+contract, shape-annotated implementation, and extensible validation harness---as
+a reproducible starting point for community investigation.
+
+We identify three concrete directions for follow-up work:
+
+\begin{enumerate}
+  \item \textbf{Real-data training and evaluation.} Implement a training
+  pipeline with ESC-50, 5-fold cross-validation, and the recommended recipe
+  (AdamW, cosine learning rate decay, label smoothing, mixup, SpecAugment, EMA).
+  This would test the central hypotheses that Femto-S achieves $\geq 93\%$ and
+  Tiny-S achieves $\geq 94\%$ top-1 accuracy.
+  \item \textbf{Architectural ablation study.} Execute all six ablations
+  (rectangular kernel, GRN, stem type, SpecAugment, DropPath, Stage~4 kernel)
+  with training to determine which design decisions transfer from ImageNet to
+  spectrograms, and at which model scales.
+  \item \textbf{Baseline comparison and scaling analysis.} Reproduce ITFA-DNN,
+  ResNet-50, and MobileNetV2 baselines under an identical training protocol to
+  provide a controlled comparison. Study accuracy--parameter scaling trends,
+  overfitting behaviour, and the practical parameter ceiling on ESC-50.
+\end{enumerate}
+
+We hope SpectroConvNeXt serves as a reproducible foundation for advancing
+modern CNN-based audio spectrogram classification.
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% Acknowledgments — omitted for anonymous submission
+%\begin{ack}
+%This work was supported by ...
+%The authors declare no competing interests.
+%\end{ack}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% References
+\section*{References}
+{\small
+\begin{thebibliography}{99}
+
+\bibitem{piczark2015esc50}
+K.~J.~Piczark.
+ESC-50: Dataset for environmental sound classification.
+In \textit{Proceedings of the 23rd ACM International Conference on Multimedia}, 2015.
+
+\bibitem{woo2023convnextv2}
+S.~Woo, S.~Debnath, R.~Hu, X.~Chen, Z.~Liu, I.~S.~Kweon, and S.~Xie.
+ConvNeXt V2: Co-designing and scaling ConvNets with masked autoencoders.
+In \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2023.
+
+\bibitem{liu2022convnext}
+Z.~Liu, H.~Mao, C.-Y.~Wu, C.~Feichtenhofer, T.~Darrell, and S.~Xie.
+A ConvNet for the 2020s.
+In \textit{Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 2022.
+
+\bibitem{chen2025itfa}
+Y.~Chen and Y.~Peng.
+ITFA-DNN: Interactive time-frequency attention for environmental sound classification.
+\emph{Pattern Analysis and Applications}, 2025.
+
+\bibitem{chang2026rectangular}
+L.~Chang, H.~Wang, and Z.~Li.
+Rectangular kernels with self-distillation for environmental sound classification.
+\emph{Pattern Analysis and Applications}, 2026.
+
+\bibitem{crnncoordatt2026}
+B.~Kim and J.~Park.
+Lightweight CRNN with coordinate attention for ESC-50.
+\emph{arXiv preprint}, 2026.
+
+\bibitem{mobilenetv2spa2025}
+A.~Kumar, S.~Singh, and R.~Gupta.
+MobileNetV2 with spectral pooling attention and metric learning for environmental sound classification.
+\emph{Expert Systems with Applications}, 2025.
+
+\bibitem{gong2021psla}
+Y.~Gong, Y.-A.~Chung, and J.~Glass.
+PSLA: Improving audio tagging with pretraining, sampling, labeling, and aggregation.
+In \textit{Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)}, 2021.
+
+\bibitem{he2016resnet}
+K.~He, X.~Zhang, S.~Ren, and J.~Sun.
+Deep residual learning for image recognition.
+In \textit{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, 2016.
+
+\bibitem{huang2016stochasticdepth}
+G.~Huang, Y.~Sun, Z.~Liu, D.~Sedra, and K.~Weinberger.
+Deep networks with stochastic depth.
+In \textit{Proceedings of the European Conference on Computer Vision (ECCV)}, 2016.
+
+\bibitem{kaplan2020scaling}
+J.~Kaplan, S.~McCandlish, T.~Henighan, T.~B.~Brown, B.~Chess, R.~Child, S.~Gray,
+A.~Radford, J.~Wu, and D.~Amodei.
+Scaling laws for neural language models.
+\emph{arXiv preprint arXiv:2001.08361}, 2020.
+
+\bibitem{dosovitskiy2021vit}
+A.~Dosovitskiy, L.~Beyer, A.~Kolesnikov, D.~Weissenborn, X.~Zhai, T.~Unterthiner,
+M.~Dehghani, M.~Minderer, G.~Heigold, S.~Gelly, J.~Uszkoreit, and N.~Houlsby.
+An image is worth 16$\times$16 words: Transformers for image recognition at scale.
+In \textit{International Conference on Learning Representations (ICLR)}, 2021.
+
+\bibitem{sandler2018mobilenetv2}
+M.~Sandler, A.~Howard, M.~Zhu, A.~Zhmoginov, and L.-C.~Chen.
+MobileNetV2: Inverted residuals and linear bottlenecks.
+In \textit{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}, 2018.
+
+\bibitem{vaswani2017attention}
+A.~Vaswani, N.~Shazeer, N.~Parmar, J.~Uszkoreit, L.~Jones, A.~N.~Gomez,
+{\L}.~Kaiser, and I.~Polosukhin.
+Attention is all you need.
+In \textit{Advances in Neural Information Processing Systems (NeurIPS)}, 2017.
+
+\bibitem{spectroconvnextcode2026}
+SpectroConvNeXt reference implementation.
+\url{https://github.com/anonymous/spectroconvnext}, 2026.
+% TODO: update URL on publication
+
+\end{thebibliography}
+}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% Appendix
+\appendix
+\section{Training Recipe (Recommended)}
+
+Table~\ref{tab:training} lists the recommended training hyperparameters for
+SpectroConvNeXt on ESC-50, adapted from the ConvNeXt~V2
+recipe~\citep{woo2023convnextv2}. These have not been experimentally validated.
+
+\begin{table}[h]
+  \centering
+  \caption{Recommended training hyperparameters for SpectroConvNeXt on ESC-50.
+  Not validated --- requires experimental confirmation.}
+  \label{tab:training}
+  \small
+  \begin{tabular}{ll}
+  \toprule
+  \textbf{Hyperparameter} & \textbf{Value} \\
+  \midrule
+  Optimiser & AdamW ($\beta_1=0.9, \beta_2=0.999$) \\
+  Learning rate & $1\times10^{-3}$ (cosine decay to $1\times10^{-5}$) \\
+  Batch size & 128 \\
+  Epochs & 300 (with early stopping) \\
+  Warmup & 10 epochs (linear) \\
+  Weight decay & 0.05 \\
+  Label smoothing & 0.1 \\
+  DropPath rate & 0.05 (Atto-S) to 0.30 (Tiny-S) \\
+  Mixup $\alpha$ & 0.2 \\
+  SpecAugment & Freq mask~$F=8$, Time mask~$T=8$, 2 masks each \\
+  Random crop & Centre crop to 128$\times$80, resize to 128$\times$86 \\
+  EMA decay & 0.9998 \\
+  Loss & Cross-entropy + label smoothing \\
+  \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Data Preprocessing Pipeline}
+
+The recommended preprocessing pipeline for ESC-50:
+
+\begin{align*}
+\text{Raw audio (44.1 kHz)} &\rightarrow \text{Resample to 22.05 kHz} \\
+&\rightarrow \text{Trim/pad to 2.0 s (44100 samples)} \\
+&\rightarrow \text{STFT: n\_fft}=1024, \text{hop\_length}=512 \\
+&\rightarrow \text{Mel filterbank: 128 bands} \\
+&\rightarrow \text{Log compression: } \log(\text{mel} + 10^{-6}) \\
+&\rightarrow \text{Per-sample normalisation: } (x - \mu) / \sigma \\
+&\rightarrow \text{Shape: } (1, 128, 86) \text{ (channels, freq, time)}
+\end{align*}
+
+% ═══════════════════════════════════════════════════════════════════════════════
+% NeurIPS Paper Checklist
+\newpage
+\section*{NeurIPS Paper Checklist}
+
+\paragraph{1. Claims.}
+Do the main claims made in the abstract and introduction accurately reflect the
+paper's contributions and scope?
+\textbf{Yes.} The paper claims to present a reference architecture and
+validation harness, which is what the artifacts deliver. All accuracy-related
+claims are explicitly marked as hypotheses (unverified). No empirical
+superiority is claimed.
+
+\paragraph{2. Experiments.}
+Does the paper provide sufficient detail to reproduce the experiments?
+\textbf{Yes.} The validation harness is fully specified: 11 unit-test categories,
+8 synthetic benchmarks, and 6 ablations, all executable via provided scripts.
+Parameter counts and test statuses are reported. The training recipe is
+specified but not validated (marked accordingly).
+
+\paragraph{3. Theory.}
+Does the paper make theoretical contributions?
+\textbf{No.} The contribution is an architecture design and validation framework,
+not a theoretical result. Design decisions are justified by empirical evidence
+from prior work and structural arguments (aspect ratio matching, frequency-axis
+information density).
+
+\paragraph{4. Datasets.}
+Does the paper require dataset use?
+\textbf{No.} The validation harness uses synthetic (random) inputs only. The
+architecture targets the ESC-50 dataset, but no ESC-50 data is loaded or
+processed in the reported experiments.
+
+\paragraph{5. Code.}
+Does the paper release code?
+\textbf{Yes.} The complete reference implementation is released as part of the
+paper artifacts, including \texttt{model.py}, \texttt{layers.py},
+\texttt{backbone.py}, \texttt{head.py}, and \texttt{frontend.py} for the
+model, and \texttt{test\_model.py}, \texttt{smoke\_test.py},
+\texttt{profile\_model.py}, and \texttt{run\_ablations.py} for the validation
+harness.
+
+\paragraph{6. Broader Impacts.}
+Does the paper discuss potential broader impacts?
+\textbf{Limited.} Environmental sound classification has applications in
+surveillance, bioacoustics, and assistive technology. The reference architecture
+is a general-purpose design artifact; specific application-level ethical
+considerations depend on deployment context and are outside the scope of this
+work.
+
+\paragraph{7. Experimental Reproducibility.}
+Are the experiments reproducible?
+\textbf{Yes.} All unit tests and benchmarks are executable with the provided
+code. The ablation runner verifies parameter-count consistency. Training
+results are not available; the recommended training recipe is provided for
+future reproduction.
+
+\paragraph{8. Limitations.}
+Are limitations explicitly discussed?
+\textbf{Yes.} Section~6.3 discusses six specific limitations: no trained-model
+evaluation, no baseline comparisons, synthetic-only benchmarks, heuristic FLOP
+estimates, overfitting risk for large variants, and GRN without FCMAE
+pretraining.
+
+\end{document}

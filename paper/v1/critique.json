@@ -1,0 +1,76 @@
+{
+  "verdict": "needs_revision",
+  "iteration": 1,
+  "summary": "The draft is well aligned with the reference-architecture scope and generally avoids empirical overclaiming, but it contains a few submission-blocking technical and grounding issues: likely LaTeX compile problems, one synthetic-benchmark count inconsistency, and several statements that overstate what the available artifacts verify.",
+  "issues": [
+    {
+      "id": "i_01",
+      "severity": "blocker",
+      "category": "latex",
+      "location": "Preamble and Tables 3\u20135 (e.g., lines 67\u201397, 513\u2013517)",
+      "problem": "The manuscript uses \\citep and \\checkmark but does not load a package that defines them. With the current preamble there is no visible natbib-compatible package and no package such as amssymb/pifont alone defines \\checkmark reliably in all classes; this is likely to fail compilation under a standard NeurIPS build.",
+      "suggested_fix": "Make the citation and symbol macros compile in the submitted source: either load the required citation package compatible with neurips_2026 (or switch to the bibliography command style expected by the class), and define or replace \\checkmark with a symbol/package that is explicitly imported.",
+      "persisted_from_previous": false
+    },
+    {
+      "id": "i_02",
+      "severity": "major",
+      "category": "claims",
+      "location": "Section 5.3, opening sentence and Table 5 caption/body (lines 553\u2013579)",
+      "problem": "The text says 'All eight synthetic benchmarks pass for the Femto-S variant', but Table 5 lists ten benchmark rows. This internal inconsistency makes it unclear what was actually run and reported.",
+      "suggested_fix": "Reconcile the benchmark count everywhere in the paper and ensure the table contains exactly the benchmarks claimed in the validator/documentation artifacts, with matching prose in Section 4 and Section 5.",
+      "persisted_from_previous": false
+    },
+    {
+      "id": "i_03",
+      "severity": "major",
+      "category": "research_eval",
+      "location": "Introduction, bold claim at lines 103\u2013105; Related Work \u00a72.4, lines 210\u2013214",
+      "problem": "The paper states as fact that 'No prior work has systematically scaled a modern CNN family across the 5M--30M parameter range on ESC-50' and analogous exclusivity language. The validator scorecard and claim_grounding.md mark this literature claim as only grounded within limited available sources and note novelty_unverified due to incomplete literature coverage. The current wording is stronger than the research_eval artifacts support.",
+      "suggested_fix": "Qualify the claim to match the artifact grounding, e.g. limit it to the surveyed literature/available sources or phrase it as 'to our knowledge' rather than an unqualified universal statement.",
+      "persisted_from_previous": false
+    },
+    {
+      "id": "i_04",
+      "severity": "major",
+      "category": "claims",
+      "location": "Section 6.1 'Shape invariants', lines 620\u2013624",
+      "problem": "The paper claims the fully convolutional design is 'a practical advantage over transformer architectures that require position encoding and fixed input sizes.' This overgeneralizes beyond what the artifacts verify and is not universally true for transformer variants, many of which can handle variable input sizes with interpolation or relative position schemes.",
+      "suggested_fix": "Narrow the statement to the verified property of this model family alone, or compare more cautiously (e.g., 'avoids the need for position-encoding design choices common in many transformer architectures').",
+      "persisted_from_previous": false
+    },
+    {
+      "id": "i_05",
+      "severity": "minor",
+      "category": "factual",
+      "location": "Section 4, Layer 1 and Table 4 (lines 426, 545)",
+      "problem": "Section 4 states that bfloat16-specific tests require CUDA, but Table 4 reports 'bfloat16 forward (CUDA only) & 4 variants & Pass' while the validator artifacts say the bf16 test category is implemented for all variants. The wording creates uncertainty about whether one variant was skipped or whether four were merely sampled.",
+      "suggested_fix": "State explicitly whether bf16 was executed on all five variants or on a subset, and align the description with the validator artifacts and test names.",
+      "persisted_from_previous": false
+    },
+    {
+      "id": "i_06",
+      "severity": "minor",
+      "category": "citations",
+      "location": "Section 3.2, GRN paragraph, line 330",
+      "problem": "The statement about float32 casting for bfloat16 safety is cited to an anonymous project repository entry rather than to the actual implementation artifact or a stable archival source. For submission, this is a weak citation for a concrete implementation claim.",
+      "suggested_fix": "Either treat this as an implementation detail described without a formal citation, or cite the released artifact in a stable, reviewable form consistent with the submission's anonymity policy.",
+      "persisted_from_previous": false
+    }
+  ],
+  "scope_check": {
+    "overstates_empirical_results": false,
+    "claims_sota_without_numbers": false,
+    "relabels_synthetic_as_real": false,
+    "demands_trained_model_results": false,
+    "ignores_research_eval_gaps": true,
+    "states_unverified_claim_as_fact": true,
+    "claims_baseline_superiority_without_coverage": false
+  },
+  "stats": {
+    "blockers": 1,
+    "majors": 3,
+    "minors": 2,
+    "nits": 0
+  }
+}

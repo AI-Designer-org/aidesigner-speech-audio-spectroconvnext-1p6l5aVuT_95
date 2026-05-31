@@ -1,0 +1,49 @@
+{
+  "verdict": "needs_revision",
+  "iteration": 2,
+  "summary": "The draft is much improved and now largely respects the reference-architecture scope, but a few grounding and factual issues remain: one claim still overstates literature coverage relative to the validator artifacts, the synthetic benchmark count is still inconsistent with the documented coverage, and the bfloat16 reporting remains ambiguous against the validator documentation.",
+  "issues": [
+    {
+      "id": "i_02",
+      "severity": "major",
+      "category": "claims",
+      "location": "Section 4, \u201cLayer 2 \u2014 Domain-Specific Synthetic Benchmarks\u201d paragraph and Section 5.3 opening sentence/Table 5 caption-body",
+      "problem": "The paper now describes \u201ca suite of ten benchmarks\u201d and says \u201cAll ten synthetic benchmarks ... pass,\u201d but the validator experiment_coverage.md defines 8/8 synthetic benchmarks, while the paper\u2019s table includes items such as the patchify-stem check and parameter-count-style checks that are treated elsewhere as non-synthetic-benchmark or structural tests. This leaves the benchmark inventory internally and externally inconsistent.",
+      "suggested_fix": "Align the benchmark count and membership with the validator/documentation artifacts. Either report the 8 synthetic benchmarks exactly as defined in experiment_coverage.md, or explicitly explain why additional checks are being reclassified and update all sections and tables consistently.",
+      "persisted_from_previous": true
+    },
+    {
+      "id": "i_03",
+      "severity": "major",
+      "category": "research_eval",
+      "location": "Introduction, paragraph ending with \u201cTo our knowledge...\u201d and Related Work \u00a72.4 \u201cResearch Gap\u201d",
+      "problem": "The wording still states a broad novelty claim as fact: \u201cno prior work within the surveyed literature has systematically scaled...\u201d and repeats similar exclusivity language. The validator scorecard explicitly lists novelty_unverified because literature coverage is limited by the level_1 task, so the manuscript should not present this as settled beyond the available-source survey.",
+      "suggested_fix": "Narrow the claim to the available-source scope, e.g. \u201cwithin the sources we reviewed\u201d or \u201cin our limited survey of available sources,\u201d and disclose the validator\u2019s literature-coverage limitation when motivating novelty.",
+      "persisted_from_previous": true
+    },
+    {
+      "id": "i_05",
+      "severity": "minor",
+      "category": "factual",
+      "location": "Section 4, Layer 1 paragraph; Table 4 note; NeurIPS Checklist item 2",
+      "problem": "The manuscript says bfloat16 forward was tested on only four variants, whereas experiment_coverage.md lists the bf16 forward test category as implemented for all variants. This may reflect runtime sampling rather than test availability, but the paper does not distinguish implementation coverage from executed subset, leaving the record ambiguous.",
+      "suggested_fix": "State explicitly whether the test exists for all five variants but was executed on a four-variant subset for this report, or whether one variant was excluded for a concrete reason. Keep the wording consistent across Section 4, Table 4, and the checklist.",
+      "persisted_from_previous": true
+    }
+  ],
+  "scope_check": {
+    "overstates_empirical_results": false,
+    "claims_sota_without_numbers": false,
+    "relabels_synthetic_as_real": false,
+    "demands_trained_model_results": false,
+    "ignores_research_eval_gaps": true,
+    "states_unverified_claim_as_fact": true,
+    "claims_baseline_superiority_without_coverage": false
+  },
+  "stats": {
+    "blockers": 0,
+    "majors": 2,
+    "minors": 1,
+    "nits": 0
+  }
+}

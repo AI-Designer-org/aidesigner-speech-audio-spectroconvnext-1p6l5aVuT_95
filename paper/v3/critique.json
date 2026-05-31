@@ -1,0 +1,31 @@
+{
+  "verdict": "needs_revision",
+  "iteration": 3,
+  "summary": "The draft now mostly respects the reference-architecture scope and resolves the prior iteration's benchmark-count and novelty-scope issues, but one factual inconsistency remains around bfloat16 coverage versus the validator artifacts.",
+  "issues": [
+    {
+      "id": "i_05",
+      "severity": "minor",
+      "category": "factual",
+      "location": "Section 4, Layer 1 paragraph; Table 4 note; Discussion \u00a76.1 \u201cNumerical stability\u201d; NeurIPS Checklist item 2",
+      "problem": "The manuscript reports that bfloat16 forward was tested on only four variants, with Nano-S excluded from the parametrized bf16 test, but the validator experiment_coverage.md marks the bf16 forward test category as implemented for all variants. The current wording still does not cleanly distinguish test availability from the subset executed for the paper, leaving a residual inconsistency with the validator record.",
+      "suggested_fix": "Either align the paper with the validator by stating that bf16 forward coverage exists for all variants, or explicitly say that the test is implemented for all variants but only a four-variant subset was executed/reported here, with the reason and scope stated once and then used consistently across all mentions.",
+      "persisted_from_previous": true
+    }
+  ],
+  "scope_check": {
+    "overstates_empirical_results": false,
+    "claims_sota_without_numbers": false,
+    "relabels_synthetic_as_real": false,
+    "demands_trained_model_results": false,
+    "ignores_research_eval_gaps": false,
+    "states_unverified_claim_as_fact": false,
+    "claims_baseline_superiority_without_coverage": false
+  },
+  "stats": {
+    "blockers": 0,
+    "majors": 0,
+    "minors": 1,
+    "nits": 0
+  }
+}
