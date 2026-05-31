@@ -1,0 +1,225 @@
+{
+  "task_level": "level_1",
+  "domain": "CV, Speech/Audio",
+  "upstream_contract_present": true,
+  "contract_traceability": [
+    "Research synthesis read from: research/spectroconvnext_research_synthesis.md",
+    "Architecture blueprint read from: architect/spectroconvnext_architecture.md",
+    "ModelConfig read from: architect/spectroconvnext_config.py",
+    "Implementation read from: coder/model.py, backbone.py, head.py, frontend.py, layers.py",
+    "Smoke test read from: coder/smoke_test.py"
+  ],
+  "baseline_status": [
+    {
+      "baseline": "ConvNeXt V2 Femto (stock, 4x4 patchify)",
+      "status": "config_available",
+      "notes": "Configurable via stem_type='patchify' in femto_s(); no training results"
+    },
+    {
+      "baseline": "ConvNeXt V2 Femto (spectrogram stem, square 7x7 kernels)",
+      "status": "config_available",
+      "notes": "Configurable via stage_kernel_sizes override; covered by Ablation A"
+    },
+    {
+      "baseline": "ITFA-DNN (Chen & Peng, 2025)",
+      "status": "TODO_unverified",
+      "notes": "External implementation not provided; would need separate reproduction"
+    },
+    {
+      "baseline": "MobileNetV2 + SPA (SoundMLR, 2025)",
+      "status": "TODO_unverified",
+      "notes": "External implementation not provided"
+    },
+    {
+      "baseline": "ResNet-50 (He et al., 2016)",
+      "status": "TODO_unverified",
+      "notes": "External implementation not provided"
+    },
+    {
+      "baseline": "Lightweight CRNN + CoordAtt (2026)",
+      "status": "TODO_unverified",
+      "notes": "External implementation not provided"
+    }
+  ],
+  "claim_status_summary": {
+    "grounded": [
+      "ConvNeXt V2 provides a clean scaling family from 3.7M to 660M params",
+      "ESC-50 SOTA is ~94.2% (ITFA-DNN, 2025)",
+      "Rectangular kernels improve ESC-50 accuracy at small scale (Chang et al. 2026)",
+      "GRN prevents feature collapse in ConvNeXt V2 on ImageNet",
+      "All 5 model variants instantiate and produce correct output shapes",
+      "All 5 variants have monotonic parameter counts within 15% of targets"
+    ],
+    "hypothesis": [
+      "Rectangular (7,5) kernels benefit at all scales (5M-30M) — Ablation A configured but untrained",
+      "GRN transfers to spectrogram domain — Ablation B configured but untrained",
+      "Pure CNN matches attention-based methods on ESC-50 — no comparison results yet",
+      "10M variant (Femto-S) achieves >=93% on ESC-50 without pretraining — no training results",
+      "30M variant (Tiny-S) achieves >=94% on ESC-50 without pretraining — no training results",
+      "Spectrogram stem outperforms patchify stem — Ablation C configured but untrained"
+    ],
+    "TODO_unverified": [
+      "FCMAE pretraining benefit on audio spectrograms (out of scope for supervised-only design)",
+      "Optimal channel allocation differs from ImageNet domain",
+      "Whether Tiny-S (30M) avoids overfitting on 2000-clip ESC-50 dataset",
+      "All accuracy claims (no training pipeline available)",
+      "All baseline comparisons (no baseline implementations available)",
+      "FLOP estimates (2x/6x params) — actual measured FLOPs not reported",
+      "McNemar's test for statistical significance"
+    ]
+  },
+  "scores": {
+    "novelty": {
+      "score": 4,
+      "evidence": [
+        "Systematic modern CNN family scaling on ESC-50 across 5M-30M identified as genuine gap",
+        "Rectangular kernel scaling behavior at >2M params unstudied in literature",
+        "GRN transfer from ImageNet to spectrograms novel (no prior work)",
+        "5 cleanly scaled variants with spectrogram adaptations not previously released as a family"
+      ],
+      "concerns": [
+        "TODO: unverified — literature coverage limited by available sources (level_1 task)",
+        "GRN + FCMAE co-design suggests GRN may be less beneficial in supervised-only setting"
+      ]
+    },
+    "experimental_comprehensiveness": {
+      "score": 3,
+      "evidence": [
+        "All 5 variants have shape, gradient, and numerical stability tests",
+        "6 ablations defined as single-field config changes",
+        "Ablation runner supports dry-run and training-aware modes",
+        "Profiling script covers forward and train modes, all variants",
+        "Parameter count verification within 15% tolerance",
+        "Gradient checkpointing correctness verified"
+      ],
+      "concerns": [
+        "No training pipeline — ablations cannot produce metric deltas",
+        "No ESC-50 data loading or 5-fold CV implementation",
+        "No baseline reproduction code",
+        "No McNemar's test implementation",
+        "No learning curves or validation metrics"
+      ]
+    },
+    "theoretical_foundation": {
+      "score": 3,
+      "evidence": [
+        "10 design decisions with evidence status (grounded/hypothesis) in architecture doc",
+        "Spectrogram aspect ratio argument for rectangular kernels (1.49:1)",
+        "Frequency-axis information density asymmetry justified",
+        "ConvNeXt V2 block design grounded in established literature"
+      ],
+      "concerns": [
+        "FLOP estimates use heuristic (2x/6x params) rather than measured values",
+        "No formal receptive field analysis",
+        "No analysis of asymmetric stride effect on effective RF aspect ratio",
+        "Frequency-axis discriminative claim asserted without formal citation"
+      ]
+    },
+    "result_analysis": {
+      "score": 2,
+      "evidence": [
+        "Parameter counts verified for all 5 variants (smoke test)",
+        "Monotonic parameter scaling confirmed across variants",
+        "Profiling provides throughput and memory estimates",
+        "All variants produce correct output shapes at multiple input resolutions"
+      ],
+      "concerns": [
+        "No accuracy results — central hypothesis unverifiable",
+        "No learning curves or convergence analysis",
+        "No confusion matrices or per-class metrics",
+        "No overfitting analysis (train/val gap)",
+        "No baseline comparison results",
+        "No scaling law analysis (params vs accuracy)"
+      ]
+    },
+    "implementation_reproducibility": {
+      "score": 4,
+      "evidence": [
+        "Complete PyTorch implementation, 6 source files",
+        "Config dataclass with all hyperparameters, no magic numbers",
+        "5 variants precisely specified with convenience constructors",
+        "AudioFrontend for reproducible spectrogram extraction",
+        "Preprocessing/augmentation/training configs fully specified",
+        "Gradient checkpointing implemented and tested",
+        "Device-portable (CUDA, MPS, CPU)"
+      ],
+      "concerns": [
+        "No training script (train.py) — most critical reproducibility gap",
+        "No ESC-50 data loader",
+        "No setup.py or requirements.txt",
+        "No fixed random seed for reproducibility of stochastic operations",
+        "No checkpoint save/load utilities"
+      ]
+    },
+    "writing_readiness": {
+      "score": 3,
+      "evidence": [
+        "Comprehensive research synthesis document (landscape, gaps, hypothesis, falsification)",
+        "Detailed architecture blueprint with pseudocode, ASCII diagram, traceability table",
+        "Code with complete docstrings, type annotations, shape comments",
+        "Ablation catalogue with expected deltas and failure routing",
+        "README with quick-start example"
+      ],
+      "concerns": [
+        "No paper draft or results section",
+        "No publication-quality figures",
+        "No ablation tables with actual numbers",
+        "ESC-50 dataset description minimal",
+        "No SOTA comparison table with results"
+      ]
+    }
+  },
+  "blocking_gaps": [
+    {
+      "code": "benchmark_not_executable",
+      "description": "No training pipeline exists. The central hypothesis (>=93% at 10M) cannot be evaluated without train.py and ESC-50 data loading."
+    },
+    {
+      "code": "baseline_not_beaten",
+      "description": "No baseline implementations (ITFA-DNN, ResNet-50, MobileNetV2) provided. Cannot claim SOTA without comparison."
+    },
+    {
+      "code": "ablation_missing",
+      "description": "All 6 ablations are configured but cannot produce metric deltas without training pipeline."
+    },
+    {
+      "code": "coverage_gap",
+      "description": "5-fold CV, McNemar's test, learning curves, confusion matrix not implemented."
+    },
+    {
+      "code": "claim_not_grounded",
+      "description": "All accuracy-related claims (>=93%, >=94%, rectangular kernel benefit, GRN benefit) are unverified without training results."
+    },
+    {
+      "code": "novelty_unverified",
+      "description": "Literature coverage limited to available sources (level_1 task). Full novelty claim requires broader literature review."
+    }
+  ],
+  "recommended_next_experiments": [
+    {
+      "priority": 1,
+      "experiment": "Implement train.py with ESC-50 data loading, 5-fold CV, SpecAugment, Mixup, logging",
+      "expected_outcome": "Accuracy results for all 5 variants under standardized protocol"
+    },
+    {
+      "priority": 2,
+      "experiment": "Execute all 6 ablations with training on Femto-S (10M) scale",
+      "expected_outcome": "Metric deltas for rectangular kernel, GRN, stem type, SpecAugment, DropPath, Stage 4 kernel"
+    },
+    {
+      "priority": 3,
+      "experiment": "Reproduce ITFA-DNN and ResNet-50 baselines with identical training pipeline",
+      "expected_outcome": "Direct comparison of SpectroConvNeXt vs established methods at equivalent parameter counts"
+    },
+    {
+      "priority": 4,
+      "experiment": "Profile on A100 with torch.compile for all 5 variants",
+      "expected_outcome": "Measured throughput, memory, FLOPs; validate FLOP estimates"
+    },
+    {
+      "priority": 5,
+      "experiment": "Train/val gap analysis: monitor overfitting as function of model size",
+      "expected_outcome": "Determine whether Tiny-S (30M) overfits on 2000-clip ESC-50; falsification of scaling ceiling hypothesis"
+    }
+  ]
+}
